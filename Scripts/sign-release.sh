@@ -57,4 +57,17 @@ while IFS= read -r -d '' CODE; do
         FAILED=1
     fi
 done < <(find "$APP" \( -name '*.app' -o -name '*.xpc' -o -name '*.framework' -o -name 'Autoupdate' \) -print0)
+
+# A certificate without an Apple Team ID (self-signed) fails library validation
+# for every embedded framework, and dyld kills the app at launch with "different
+# Team IDs". Such an app must opt out of library validation.
+EXECUTABLE="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+APP_INFO=$(codesign -dvv "$APP" 2>&1 || true)
+if ! grep -q 'Signature=adhoc' <<< "$APP_INFO" \
+    && grep -q 'TeamIdentifier=not set' <<< "$APP_INFO" \
+    && otool -L "$EXECUTABLE" | grep -q '@rpath/' \
+    && ! codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q 'com.apple.security.cs.disable-library-validation'; then
+    echo "error: $APP has no Team ID and loads embedded frameworks, but library validation is on: it would crash at launch" >&2
+    FAILED=1
+fi
 exit "$FAILED"

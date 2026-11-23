@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	Releases of this fork are signed with a self-signed certificate, which has no
+	Apple Team ID. Under the hardened runtime, library validation then refuses to
+	load the embedded Sparkle.framework ("different Team IDs") and Ice dies at
+	launch. Turning library validation off for the app keeps the rest of the
+	hardened runtime, including the block on DYLD_INSERT_LIBRARIES.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
