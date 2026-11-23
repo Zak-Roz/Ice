@@ -26,9 +26,11 @@ concurrency:
 
 jobs:
   release:
-    # The xcode-27 preview image sat in the queue for good, so build on the
-    # stable macOS 26 image with the newest Xcode it has.
-    runs-on: macos-26
+    # GitHub's macOS arm64 runners never picked the job up ("capacity
+    # constraints"), so build on the Intel image by default. The app is built
+    # universal either way. Set the RELEASE_RUNNER repository variable (for
+    # example to macos-26 or xcode-27) to build elsewhere.
+    runs-on: ${{ vars.RELEASE_RUNNER || 'macos-26-intel' }}
     permissions:
       contents: write
     outputs:
