@@ -7,33 +7,69 @@ Ice is a powerful menu bar management tool. While its primary function is hiding
 
 ![Banner](https://github.com/user-attachments/assets/4423085c-4e4b-4f3d-ad0f-90a217c03470)
 
-[![Download](https://img.shields.io/badge/download-latest-brightgreen?style=flat-square)](https://github.com/jordanbaird/Ice/releases/latest)
+[![Download](https://img.shields.io/github/v/release/Zak-Roz/Ice?label=download&style=flat-square)](https://github.com/Zak-Roz/Ice/releases/latest)
 ![Platform](https://img.shields.io/badge/platform-macOS-blue?style=flat-square)
 ![Requirements](https://img.shields.io/badge/requirements-macOS%2014%2B-fa4e49?style=flat-square)
-[![Sponsor](https://img.shields.io/badge/Sponsor%20%E2%9D%A4%EF%B8%8F-8A2BE2?style=flat-square)](https://github.com/sponsors/jordanbaird)
-[![Website](https://img.shields.io/badge/Website-015FBA?style=flat-square)](https://icemenubar.app)
-[![License](https://img.shields.io/github/license/jordanbaird/Ice?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/github/license/Zak-Roz/Ice?style=flat-square)](LICENSE)
 
-> [!NOTE]
-> Ice is currently in active development. Some features have not yet been implemented. Download the latest release [here](https://github.com/jordanbaird/Ice/releases/latest) and see the roadmap below for upcoming features.
-
-<a href="https://www.buymeacoffee.com/jordanbaird" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;">
-</a>
+> [!IMPORTANT]
+> **This is a community fork of [jordanbaird/Ice](https://github.com/jordanbaird/Ice) that works on macOS 27.**
+> The original project has not had a release since macOS 27 broke it. This fork builds on the
+> original author's unreleased `macos-26` work and the macOS 27 port by
+> [@RabenkoYevhenii](https://github.com/RabenkoYevhenii) ([jordanbaird/Ice#995](https://github.com/jordanbaird/Ice/pull/995)),
+> with fixes from the people testing it. Report problems with this build
+> [here](https://github.com/Zak-Roz/Ice/issues), not on the original issue tracker.
+>
+> If you like Ice, consider [sponsoring its original author](https://github.com/sponsors/jordanbaird).
 
 ## Install
 
-### Manual Installation
-
-Download the "Ice.zip" file from the [latest release](https://github.com/jordanbaird/Ice/releases/latest) and move the unzipped app into your `Applications` folder.
-
 ### Homebrew
 
-Install Ice using the following command:
-
 ```sh
-brew install --cask jordanbaird-ice
+brew install --cask zak-roz/tap/ice
 ```
+
+If the original Ice is installed through Homebrew, remove it first with `brew uninstall --cask jordanbaird-ice`.
+Your settings carry over: this build uses the same bundle identifier.
+
+### Manual installation
+
+Download `Ice.zip` from the [latest release](https://github.com/Zak-Roz/Ice/releases/latest) and move the unzipped app into your `Applications` folder.
+
+### First launch
+
+Releases are signed with this fork's own certificate but are **not notarized** by Apple, so macOS blocks
+the first launch. Open **System Settings › Privacy & Security** and click **Open Anyway** next to the
+message about Ice.
+
+Ice needs **Accessibility** and **Screen Recording**. If you ran another build of Ice before, remove its
+entries from both lists (select it and click **−**) and grant them again: macOS keeps a grant for the exact
+signature it was given to, and a switch left over from another build looks on but does nothing. Updates of
+this build keep the grants, because every release is signed with the same certificate.
+
+### Updates
+
+Ice checks for updates itself (Settings › About) and installs releases signed with this fork's update key.
+`brew upgrade --cask --greedy ice` works too.
+
+## On macOS 27
+
+macOS 27 moved the menu bar items into a system process, MenuBarAgent, so the way Ice used to hide them no
+longer works. On macOS 27 this build:
+
+- **Hides whole applications.** By default it switches applications off under the "Allow in the Menu Bar"
+  switches in System Settings, the same switches you can flip by hand. Ice turns them back on when it
+  quits, and again the next time it starts if it was killed. If you remove Ice while it is not running,
+  start it once and quit it, or turn the switches back on in System Settings. Settings › Advanced offers a
+  second method that hides items through MenuBarAgent instead.
+- **Arranges sections per application**: an application with several items keeps them together. The order
+  of items within a section follows the menu bar; ⌘-drag them there to reorder.
+- **Shows the Ice Bar** with pictures of the hidden items taken from the menu bar, which needs Screen
+  Recording. Clicking an item opens it.
+- **Does not offer item spacing**, which macOS 27 ignores for most items.
+
+On macOS 14 to 26, Ice works as it always has.
 
 ## Features/Roadmap
 
@@ -106,6 +142,28 @@ Ice uses a number of system APIs that are available starting in macOS 14. As suc
 #### Custom menu bar item spacing
 
 ![Menu Bar Item Spacing](https://github.com/user-attachments/assets/b196aa7e-184a-4d4c-b040-502f4aae40a6)
+
+## Building
+
+Open `Ice.xcodeproj` in Xcode 27 and run the `Ice` scheme. Local builds are signed ad hoc, so macOS asks for
+Accessibility and Screen Recording again after every build.
+
+Unit tests for the macOS 27 logic run with `swift test`.
+
+## Releasing
+
+Push a tag such as `v0.12.1`. The [release workflow](.github/workflows/release.yml) builds Ice, signs it
+(hardened runtime, this fork's certificate), publishes `Ice.zip` and a Sparkle `appcast.xml` to a GitHub
+release, and updates the cask in [Zak-Roz/homebrew-tap](https://github.com/Zak-Roz/homebrew-tap). A tag with
+a suffix, such as `v0.12.1-beta.1`, becomes a pre-release that neither Sparkle nor Homebrew offer.
+
+## Credits
+
+- [Jordan Baird](https://github.com/jordanbaird), who wrote Ice.
+- [@RabenkoYevhenii](https://github.com/RabenkoYevhenii) for the macOS 27 port, and the testers and
+  contributors on [jordanbaird/Ice#995](https://github.com/jordanbaird/Ice/pull/995), including
+  @jasonsmithio, @Theralley, @carlossantos74 and Michael Yu.
+- The release pipeline was informed by [cavaldos/Ice](https://github.com/cavaldos/Ice).
 
 ## License
 
