@@ -26,7 +26,9 @@ concurrency:
 
 jobs:
   release:
-    runs-on: xcode-27
+    # The xcode-27 preview image sat in the queue for good, so build on the
+    # stable macOS 26 image with the newest Xcode it has.
+    runs-on: macos-26
     permissions:
       contents: write
     outputs:
@@ -65,10 +67,10 @@ jobs:
 
       - name: Select Xcode
         run: |
-          XCODE=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
           if [ -z "$XCODE" ]; then
-            echo "::error::No Xcode 27 on this runner"
-            ls -d /Applications/Xcode*.app
+            echo "::error::No Xcode 26 or later on this runner"
             exit 1
           fi
           sudo xcode-select -s "$XCODE"
