@@ -214,6 +214,10 @@ final class Concealer27: ObservableObject {
             }
             Task { @MainActor in
                 for (bundleID, pid) in launched {
+                    if bundleID == Self.menuBarAgentBundleID {
+                        self?.menuBarAgentRestarted()
+                        continue
+                    }
                     self?.showWhileLaunching(bundleID: bundleID, pid: pid)
                     if self?.backend == .native {
                         self?.reapplyWhileLaunching(bundleID: bundleID)
@@ -562,6 +566,28 @@ final class Concealer27: ObservableObject {
     }
 
     private static let menuBarAgentBundleID = "com.apple.MenuBarAgent"
+
+    /// Applies concealment afresh once MenuBarAgent has started again.
+    ///
+    /// Assessment assertions live in MenuBarAgent and die with it, but `controller.apply` keeps
+    /// every live entry whose spec has not changed, so after a restart it went on holding the
+    /// dead tokens and never activated new ones: every hidden application came back and stayed
+    /// on the bar until the target set changed. Reported with this fix by jasonsmithio on
+    /// jordanbaird/Ice#995 (2026-11-22). The native switches are preferences and survive the
+    /// restart, so there `update()` just applies them again.
+    private func menuBarAgentRestarted() {
+        logger.notice("MenuBarAgent started again, so concealment is applied afresh")
+        let previous = applyTask
+        applyTask = Task { [controller] in
+            await previous?.value
+            controller.releaseAll()
+        }
+        update()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            await self?.appState?.itemManager.cacheItemsRegardless()
+        }
+    }
 
     /// Quits an application and starts it again, which is what lays its items out afresh.
     ///
