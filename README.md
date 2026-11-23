@@ -27,10 +27,14 @@ Ice is a powerful menu bar management tool. While its primary function is hiding
 ### Homebrew
 
 ```sh
+brew tap zak-roz/tap
+brew trust --cask zak-roz/tap/ice
 brew install --cask zak-roz/tap/ice
 ```
 
-If the original Ice is installed through Homebrew, remove it first with `brew uninstall --cask jordanbaird-ice`.
+Homebrew 7 and later only load casks from third-party taps that you trust; `brew trust` above trusts this
+one cask, not the whole tap. If the original Ice is installed through Homebrew, remove it first with
+`brew uninstall --cask jordanbaird-ice`.
 Your settings carry over: this build uses the same bundle identifier.
 
 ### Manual installation
