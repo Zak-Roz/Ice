@@ -1,0 +1,324 @@
+name: Release
+
+# Push a tag like v0.12.1 to build, sign and publish a release:
+#   1. build Ice.app and sign it with this fork's certificate (hardened runtime),
+#   2. attach Ice.zip and a Sparkle appcast.xml to a GitHub release,
+#   3. update the cask in <owner>/homebrew-tap.
+# A tag with a suffix (v0.12.1-beta.1) becomes a pre-release: Sparkle's feed
+# (releases/latest) and Homebrew skip it.
+#
+# Repository secrets:
+#   MACOS_CERT_P12           base64 of the .p12 holding the "Ice Release" signing certificate
+#   MACOS_CERT_PASSWORD      password of that .p12
+#   SPARKLE_PRIVATE_KEY      EdDSA private key matching SUPublicEDKey in Ice/Resources/Info.plist
+#   HOMEBREW_TAP_DEPLOY_KEY  private half of a write deploy key on <owner>/homebrew-tap
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: xcode-27
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Derive version from tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag '$TAG' must look like v1.2.3 or v1.2.3-beta.1"
+            exit 1
+          fi
+          MAJOR=${BASH_REMATCH[1]} MINOR=${BASH_REMATCH[2]} PATCH=${BASH_REMATCH[3]} SUFFIX=${BASH_REMATCH[4]}
+          if [ "$MINOR" -ge 100 ] || [ "$PATCH" -ge 100 ]; then
+            echo "::error::Minor and patch must stay below 100 to keep build numbers increasing"
+            exit 1
+          fi
+          # Sparkle compares build numbers. Deriving them from the version keeps
+          # them increasing with every release: 0.12.0 -> 1200, 0.12.1 -> 1201.
+          BUILD=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          VERSION="${TAG#v}"
+          PRERELEASE=false
+          [ -n "$SUFFIX" ] && PRERELEASE=true
+          {
+            echo "version=$VERSION"
+            echo "build=$BUILD"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION ($BUILD), pre-release: $PRERELEASE"
+
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 27 on this runner"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      # Sparkle's binary target is a GitHub release download, and anonymous
+      # downloads from runners get throttled, so authenticate and retry.
+      - name: Resolve Swift packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          printf 'machine github.com login x-access-token password %s\n' "$GH_TOKEN" > ~/.netrc
+          for attempt in 1 2 3 4 5; do
+            xcodebuild -resolvePackageDependencies -project Ice.xcodeproj -scheme Ice \
+              -derivedDataPath build -packageAuthorizationProvider netrc && exit 0
+            echo "Package resolution failed (attempt $attempt), retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          exit 1
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          xcodebuild -project Ice.xcodeproj -scheme Ice -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build \
+            -packageAuthorizationProvider netrc -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO DEVELOPMENT_TEAM= \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
+            build
+          rm -f ~/.netrc
+          echo "APP=$PWD/build/Build/Products/Release/Ice.app" >> "$GITHUB_ENV"
+
+      # One stable certificate gives the app the same designated requirement in
+      # every release, so macOS keeps its Accessibility and Screen Recording
+      # access across updates (an ad-hoc signature changes with every build).
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ] || [ -z "$CERT_PASSWORD" ]; then
+            echo "::error::Set the MACOS_CERT_P12 and MACOS_CERT_PASSWORD secrets"
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # codesign refuses an untrusted self-signed identity, so trust it for
+          # code signing on this throwaway runner only.
+          security find-certificate -c "Ice Release" -p "$KEYCHAIN" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          rm -f "$RUNNER_TEMP/cert.pem"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/"Ice Release/ {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No \"Ice Release\" code signing identity in MACOS_CERT_P12"
+            exit 1
+          fi
+          echo "SIGN_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Sign
+        run: |
+          Scripts/sign-release.sh "$APP" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN"
+          REQUIREMENT=$(codesign -d -r- "$APP" 2>&1)
+          echo "$REQUIREMENT"
+          if ! grep -q 'certificate leaf' <<< "$REQUIREMENT" || grep -q 'cdhash' <<< "$REQUIREMENT"; then
+            echo "::error::The designated requirement is not tied to the certificate"
+            exit 1
+          fi
+          security delete-keychain "$SIGN_KEYCHAIN"
+
+      - name: Package
+        id: package
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "$APP" Ice.zip
+          SHA256=$(shasum -a 256 Ice.zip | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "Ice.zip sha256: $SHA256"
+
+      - name: Install Sparkle tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SPARKLE_VERSION=$(plutil -extract pins json -o - \
+            Ice.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+            | python3 -c 'import json,sys; print(next(p["state"]["version"] for p in json.load(sys.stdin) if p["identity"] == "sparkle"))')
+          echo "Sparkle $SPARKLE_VERSION"
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          for attempt in 1 2 3 4 5; do
+            gh release download "$SPARKLE_VERSION" -R sparkle-project/Sparkle \
+              -p "Sparkle-$SPARKLE_VERSION.tar.xz" -O "$RUNNER_TEMP/sparkle.tar.xz" --clobber && break
+            [ "$attempt" = 5 ] && exit 1
+            sleep $((attempt * 15))
+          done
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
+
+      - name: Write appcast
+        env:
+          SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$SPARKLE_KEY" ]; then
+            echo "::error::Set the SPARKLE_PRIVATE_KEY secret"
+            exit 1
+          fi
+          KEY_FILE="$RUNNER_TEMP/sparkle_key"
+          (umask 077; printf '%s' "$SPARKLE_KEY" > "$KEY_FILE")
+          SIGNATURE=$("$SPARKLE_BIN/sign_update" --ed-key-file "$KEY_FILE" Ice.zip)
+          rm -f "$KEY_FILE"
+          if ! [[ "$SIGNATURE" =~ ^sparkle:edSignature=\"[A-Za-z0-9+/=]+\"\ length=\"[0-9]+\"$ ]]; then
+            echo "::error::Unexpected sign_update output"
+            exit 1
+          fi
+          MINIMUM=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")
+          PUB_DATE=$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')
+          cat > appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Ice</title>
+              <link>https://github.com/$REPO</link>
+              <item>
+                <title>Ice $VERSION</title>
+                <pubDate>$PUB_DATE</pubDate>
+                <sparkle:version>$BUILD</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>$MINIMUM</sparkle:minimumSystemVersion>
+                <sparkle:fullReleaseNotesLink>https://github.com/$REPO/releases/tag/$TAG</sparkle:fullReleaseNotesLink>
+                <description><![CDATA[<p>Ice $VERSION is available. The full release notes are on <a href="https://github.com/$REPO/releases/tag/$TAG">GitHub</a>.</p>]]></description>
+                <enclosure url="https://github.com/$REPO/releases/download/$TAG/Ice.zip" type="application/octet-stream" $SIGNATURE />
+              </item>
+            </channel>
+          </rss>
+          EOF
+          xmllint --noout appcast.xml
+          cat appcast.xml
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          FLAGS=(--verify-tag --title "Ice $VERSION" --generate-notes)
+          if [ "$PRERELEASE" = true ]; then
+            FLAGS+=(--prerelease)
+          else
+            FLAGS+=(--latest)
+          fi
+          gh release create "$TAG" Ice.zip appcast.xml "${FLAGS[@]}"
+
+  homebrew:
+    needs: release
+    if: needs.release.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update the cask in the tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::Set the HOMEBREW_TAP_DEPLOY_KEY secret"
+            exit 1
+          fi
+          KEYS="$RUNNER_TEMP/keys"
+          mkdir -m 700 "$KEYS"
+          trap 'rm -rf "$KEYS"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$KEYS/tap"
+          chmod 600 "$KEYS/tap"
+          # github.com's published ed25519 host key (https://api.github.com/meta).
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$KEYS/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $KEYS/tap -o IdentitiesOnly=yes -o UserKnownHostsFile=$KEYS/known_hosts"
+          git clone --depth 1 "git@github.com:$OWNER/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cat > tap/Casks/ice.rb <<EOF
+          cask "ice" do
+            version "$VERSION"
+            sha256 "$SHA256"
+
+            url "https://github.com/$REPO/releases/download/v#{version}/Ice.zip"
+            name "Ice"
+            desc "Menu bar manager to hide, show and rearrange items"
+            homepage "https://github.com/$REPO"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            auto_updates true
+            conflicts_with cask: "jordanbaird-ice"
+            depends_on macos: :sonoma
+
+            app "Ice.app"
+
+            # Quitting lets Ice turn back on the "Allow in the Menu Bar" switches
+            # it turned off to hide items on macOS 27.
+            uninstall quit: "com.jordanbaird.Ice"
+
+            zap trash: [
+              "~/Library/Application Support/Ice",
+              "~/Library/Caches/com.jordanbaird.Ice",
+              "~/Library/HTTPStorages/com.jordanbaird.Ice",
+              "~/Library/Preferences/com.jordanbaird.Ice.plist",
+            ]
+
+            caveats <<~CAVEATS
+              Ice is signed with a self-signed certificate and is not notarized.
+              The first time you open it, macOS blocks it: open
+                System Settings > Privacy & Security
+              and click "Open Anyway" next to the message about Ice.
+
+              Ice needs Accessibility and Screen Recording. If you used another
+              build of Ice before, remove its entries there first, then grant
+              them again; later updates keep them.
+            CAVEATS
+          end
+          EOF
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/ice.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date"
+            exit 0
+          fi
+          git commit -m "ice $VERSION"
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            sleep $((attempt * 10))
+            git pull --rebase
+          done
+          exit 1
