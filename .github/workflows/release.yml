@@ -132,7 +132,8 @@ jobs:
           sudo security add-trusted-cert -d -r trustRoot -p codeSign \
             -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
           rm -f "$RUNNER_TEMP/cert.pem"
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/"Ice Release/ {print $2; exit}')
+          # Without -v, so the lookup does not depend on that trust taking effect.
+          IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" | awk '/"Ice Release/ {print $2; exit}')
           if [ -z "$IDENTITY" ]; then
             echo "::error::No \"Ice Release\" code signing identity in MACOS_CERT_P12"
             exit 1
