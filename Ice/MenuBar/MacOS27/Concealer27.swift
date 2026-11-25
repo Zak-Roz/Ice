@@ -85,12 +85,16 @@ final class Concealer27: ObservableObject {
 
     /// Whether Ice's dividers can leave the bar.
     ///
-    /// Through the native switch nothing restricts the bar, so MenuBarAgent keeps Ice's own items
-    /// on it, and each divider — two points wide and drawing nothing — still gets the spacing
-    /// MenuBarAgent puts between any two items: about 50 points of empty bar between visible icons
-    /// on the built-in display (measured 2026-10-26). Under assessment mode MenuBarAgent dropped
-    /// them on its own. Sections come from the saved layout on 27, so once that layout has been
-    /// read off the bar the dividers have nothing left to mark.
+    /// MenuBarAgent keeps Ice's own items on the bar, and each divider — two points wide and
+    /// drawing nothing — still gets the spacing MenuBarAgent puts between any two items: about
+    /// 50 points of empty bar between visible icons on the built-in display (measured 2026-10-26).
+    /// Sections come from the saved layout on 27, so once that layout has been read off the bar
+    /// the dividers have nothing left to mark, whichever method hides the applications.
+    ///
+    /// This used to be limited to the native switch, because assessment mode dropped Ice's items
+    /// from the bar of the locally signed builds it was measured with. A release signed with a
+    /// certificate keeps them under assessment mode too, and the hidden section's divider showed
+    /// as an empty gap left of Ice's icon (reported 2026-11-25).
     @Published private(set) var dividersMayStandAside = false
     private var cancellables = Set<AnyCancellable>()
     private var runningApplicationsObservation: NSKeyValueObservation?
@@ -249,17 +253,6 @@ final class Concealer27: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-        let navigation = appState.navigationState
-        navigation.$isSettingsPresented
-            .combineLatest(navigation.$settingsNavigationIdentifier)
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.update()
-                }
-            }
-            .store(in: &cancellables)
         appState.captureIndicatorPanel27.performSetup(watcher: appState.captureWatcher27, concealer: self)
         // Changing the method releases the old one in full before the new one is applied (see
         // `update`). Received on the main queue, so the setting already holds the new value.
@@ -292,7 +285,7 @@ final class Concealer27: ObservableObject {
             return
         }
         self.backend = backend
-        let mayStandAside = backend == .native && Defaults.bool(forKey: .macOS27LayoutSeeded)
+        let mayStandAside = Defaults.bool(forKey: .macOS27LayoutSeeded)
         if dividersMayStandAside != mayStandAside {
             dividersMayStandAside = mayStandAside
         }
@@ -451,9 +444,7 @@ final class Concealer27: ObservableObject {
         }
         guard isConcealing else {
             // With nothing concealed every item is on the bar, so a notched one folds what does
-            // not fit and there is nothing to tell. This is also when the user is most likely to
-            // be looking: opening the Menu Bar Layout window reveals everything, and the notice
-            // that brought them there would otherwise disappear as they arrived.
+            // not fit and there is nothing to tell.
             return
         }
         let items = await MenuBarItemProvider27.items()
@@ -1164,11 +1155,13 @@ final class Concealer27: ObservableObject {
     // MARK: Private
 
     private func revealState(_ appState: AppState) -> RevealState27 {
-        let navigation = appState.navigationState
-        if navigation.isSettingsPresented, navigation.settingsNavigationIdentifier == .menuBarLayout {
-            // Everything is drawn while the layout window is open, so every item can be photographed.
-            return .allRevealed
-        }
+        // The layout window does not reveal anything. It did, so that every item could be
+        // photographed, but on a notched display everything at once does not fit: macOS folded
+        // the overflow behind its "«", where it could be neither photographed nor listed, so the
+        // window showed only part of the bar until the "«" was clicked, and the bar filled up
+        // with items the user had hidden (reported 2026-11-25). The window draws the hidden
+        // items from their stored tiles, as the Ice Bar does, and `ItemImageStore27` shows an
+        // application without a tile for a moment, one at a time, to photograph it.
         if appState.settings.general.useIceBar {
             // The Ice Bar shows hidden items in its own panel, so the bar stays concealed.
             return .allHidden

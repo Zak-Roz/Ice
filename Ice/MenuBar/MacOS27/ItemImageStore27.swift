@@ -469,7 +469,7 @@ final class ItemImageStore27 {
     /// Checked both when a tile is stored and when a stored one is first read back. A tile that
     /// kept the bar used to stay for good: `photographMissing` only photographs items with no
     /// image at all, so nothing ever replaced it, and on a notched Mac opening the layout window
-    /// does not help either — macOS folds most items away and they cannot be photographed there.
+    /// did not help either, back when it revealed everything — macOS folded most items away.
     /// Three such tiles stood for a week on @jasonsmithio's machine (jordanbaird/Ice#995).
     private func isUsable(_ image: CGImage, key: String) -> Bool {
         guard let pixels = Self.pixels(of: image) else {

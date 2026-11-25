@@ -395,13 +395,10 @@ final class ControlItem {
             button.image = image
         case .hidden, .alwaysHidden:
             if #available(macOS 27.0, *) {
-                // Ice is signed locally, so MenuBarAgent drops its items whenever anything is
-                // concealed (measured on macOS 27.0). A divider is therefore never drawn, yet a
-                // standard-width status item still holds 18 points of the bar, which reads as a
-                // gap between the neighbouring icons. Sections come from the saved layout on 27,
-                // so the dividers only have to stay in the bar, not to take up room in it.
-                // Through the native switch MenuBarAgent keeps them, spacing included, so once
-                // the layout no longer needs reading off the bar they leave it altogether.
+                // A divider draws nothing on 27, yet MenuBarAgent spaces it like any other item,
+                // which reads as a gap between the neighbouring icons. Sections come from the
+                // saved layout there, so once the layout no longer needs reading off the bar the
+                // dividers leave it altogether (see `Concealer27.dividersMayStandAside`).
                 if appState.concealer27.dividersMayStandAside {
                     standAside()
                 } else {
